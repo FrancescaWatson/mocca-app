@@ -42,6 +42,13 @@ route("/css/style.css") do
     )
 end
 
+route("/js/vue.global.prod.js") do
+    Genie.Renderer.respond(
+        read(joinpath(PUBLIC_DIR, "js", "vue.global.prod.js"), String),
+        :javascript
+    )
+end
+
 route("/api/defaults/:case_name") do
     cn = lowercase(strip(payload(:case_name)))
     if !(cn in AVAILABLE_CASES)
@@ -170,19 +177,19 @@ function dashboard_html()
                                 <input v-if="Array.isArray(field.value)"
                                        class="param-input is-array"
                                        :value="JSON.stringify(field.value)"
-                                       @change="onArrayParamChange(cat.key, field.key, \\$event)">
+                                       @change="onArrayParamChange(cat.key, field.key, \$event)">
                                 <!-- String values -->
                                 <template v-else-if="typeof field.value === 'string'">
                                     <!-- String array (for stage_types) -->
                                     <input class="param-input"
                                            :value="field.value"
-                                           @change="onParamChange(cat.key, field.key, \\$event.target.value)">
+                                           @change="onParamChange(cat.key, field.key, \$event.target.value)">
                                 </template>
                                 <!-- Object values (timestep selectors, etc.) -->
                                 <template v-else-if="typeof field.value === 'object' && field.value !== null && !Array.isArray(field.value)">
                                     <input class="param-input is-array"
                                            :value="JSON.stringify(field.value)"
-                                           @change="onObjectParamChange(cat.key, field.key, \\$event)">
+                                           @change="onObjectParamChange(cat.key, field.key, \$event)">
                                 </template>
                                 <!-- Numeric values -->
                                 <input v-else
@@ -190,7 +197,7 @@ function dashboard_html()
                                        class="param-input"
                                        :value="field.value"
                                        :step="getStep(field.value)"
-                                       @change="onParamChange(cat.key, field.key, parseFloat(\\$event.target.value))">
+                                       @change="onParamChange(cat.key, field.key, parseFloat(\$event.target.value))">
                             </div>
                         </div>
                     </div>
@@ -276,7 +283,7 @@ function dashboard_html()
 </div>
 
 <!-- Vue.js 3 from CDN -->
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="/js/vue.global.prod.js"></script>
 <script>
 const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue;
 
