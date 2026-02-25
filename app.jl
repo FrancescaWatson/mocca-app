@@ -52,6 +52,13 @@ route("/js/vue.global.prod.js") do
     )
 end
 
+route("/img/mocca-logo.svg") do
+    Genie.Renderer.respond(
+        read(joinpath(PUBLIC_DIR, "img", "mocca-logo.svg"), String),
+        :svg
+    )
+end
+
 route("/api/defaults/:case_name") do
     cn = lowercase(strip(payload(:case_name)))
     if !(cn in AVAILABLE_CASES)

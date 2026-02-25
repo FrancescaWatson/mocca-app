@@ -26,14 +26,46 @@ end
 
 # Check if Mocca is available
 const HAS_MOCCA = Ref(false)
+const MOCCA_MOD = Ref{Module}()
+
+function _load_mocca!()
+    try
+        @eval using Mocca
+        MOCCA_MOD[] = @eval Mocca
+        HAS_MOCCA[] = true
+        return true
+    catch
+        return false
+    end
+end
 
 function __init__()
-    HAS_MOCCA[] = try
-        @eval using Mocca
-        true
-    catch
-        false
+    _load_mocca!()
+end
+
+"""
+    _to_plain_dict(d) -> Dict{String,Any}
+
+Recursively convert an AbstractDict (e.g. JSON.Object) to Dict{String,Any}.
+"""
+function _to_plain_dict(d::AbstractDict)
+    result = Dict{String,Any}()
+    for (k, v) in d
+        result[string(k)] = _to_plain_value(v)
     end
+    return result
+end
+
+function _to_plain_value(v::AbstractDict)
+    return _to_plain_dict(v)
+end
+
+function _to_plain_value(v::AbstractVector)
+    return Any[_to_plain_value(x) for x in v]
+end
+
+function _to_plain_value(v)
+    return v
 end
 
 """
@@ -54,10 +86,7 @@ function run_simulation(params::AbstractDict)
     end
 
     if !HAS_MOCCA[]
-        try
-            @eval Main using Mocca
-            HAS_MOCCA[] = true
-        catch e
+        if !_load_mocca!()
             result.status = FAILED
             result.message = "Mocca.jl is not installed. Please install it with: using Pkg; Pkg.add(\"Mocca\")"
             return result
@@ -67,9 +96,10 @@ function run_simulation(params::AbstractDict)
     try
         result.status = RUNNING
 
-        # Use Mocca's parse_input to create constants and info from dict
-        mocca = Main.Mocca
-        (constants, info) = mocca.parse_input(params)
+        mocca = MOCCA_MOD[]
+        # Convert to Dict{String,Any} to satisfy Mocca's type requirements
+        plain = _to_plain_dict(params)
+        (constants, info) = mocca.parse_input(plain)
 
         # Setup and run simulation
         case, ts_config, info_level = mocca.setup_mocca_case(constants, info)

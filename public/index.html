@@ -11,8 +11,13 @@
     <!-- Header -->
     <header class="app-header">
         <div class="header-content">
-            <h1 class="app-title">☕ MoccaApp</h1>
-            <p class="app-subtitle">CO₂ Adsorption Simulation Dashboard — Powered by <a href="https://github.com/sintefmath/Mocca.jl" style="color:#c4b5fd;">Mocca.jl</a></p>
+            <div class="header-title-row">
+                <img src="/img/mocca-logo.svg" alt="Mocca.jl logo" class="header-logo">
+                <div>
+                    <h1 class="app-title">MoccaApp</h1>
+                    <p class="app-subtitle">CO₂ Adsorption Simulation Dashboard — Powered by <a href="https://github.com/sintefmath/Mocca.jl" style="color:#c4b5fd;">Mocca.jl</a></p>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -34,7 +39,7 @@
             ⚙️ Parameters
         </button>
         <button class="tab-btn" :class="{ active: activeTab === 'results' }" @click="activeTab = 'results'"
-                :disabled="!simOutput">
+                :disabled="!simOutput && !simError">
             📊 Results
         </button>
     </div>
@@ -147,9 +152,6 @@
                     <div v-if="simStatus === 'COMPLETED'" class="status-completed">
                         ✅ {{ simMessage }}
                     </div>
-                    <div v-if="simStatus === 'FAILED'" class="status-failed">
-                        ❌ {{ simMessage }}
-                    </div>
                 </div>
 
                 <!-- Results Summary -->
@@ -179,7 +181,13 @@
 
         <!-- Results Tab -->
         <div v-show="activeTab === 'results'" class="results-content">
-            <div v-if="!simOutput" class="panel no-data" style="text-align:center; padding:3rem;">
+            <!-- Simulation Error -->
+            <div v-if="simError" class="panel" style="margin-bottom:1.5rem;">
+                <div class="status-failed">
+                    ❌ {{ simError }}
+                </div>
+            </div>
+            <div v-if="!simOutput && !simError" class="panel no-data" style="text-align:center; padding:3rem;">
                 <p>No simulation results yet. Run a simulation first.</p>
             </div>
             <div v-else>
@@ -280,6 +288,7 @@ createApp({
         const simStatus = ref('IDLE');
         const simMessage = ref('');
         const simOutput = ref(null);
+        const simError = ref(null);
         const activeTab = ref('params');
         const timestepCanvas = ref(null);
         const cumulativeCanvas = ref(null);
@@ -376,6 +385,7 @@ createApp({
                 simStatus.value = 'IDLE';
                 simMessage.value = '';
                 simOutput.value = null;
+                simError.value = null;
             } catch (e) {
                 console.error('Failed to load defaults:', e);
             }
@@ -532,6 +542,7 @@ createApp({
             simStatus.value = 'RUNNING';
             simMessage.value = '';
             simOutput.value = null;
+            simError.value = null;
             validationErrors.value = [];
             try {
                 const resp = await fetch('/api/simulate', {
@@ -543,13 +554,37 @@ createApp({
                 simStatus.value = data.status;
                 simMessage.value = data.message;
                 simOutput.value = data.output || null;
-                if (data.output) {
+                if (data.status === 'FAILED') {
+                    // Check if the failure is a validation error
+                    const isValidationError = data.message && (
+                        data.message.includes('Missing required section') ||
+                        data.message.includes('must be positive') ||
+                        data.message.includes('must be between') ||
+                        data.message.includes('must be at least')
+                    );
+                    if (isValidationError) {
+                        // Show validation errors on params tab
+                        const parts = data.message.split('; ');
+                        validationErrors.value = parts.map(p => {
+                            const idx = p.indexOf(': ');
+                            return idx > 0
+                                ? { field: p.substring(0, idx), message: p.substring(idx + 2) }
+                                : { field: 'validation', message: p };
+                        });
+                        activeTab.value = 'params';
+                    } else {
+                        // Show simulation error on results tab
+                        simError.value = data.message;
+                        activeTab.value = 'results';
+                    }
+                } else if (data.output) {
                     activeTab.value = 'results';
                     nextTick(() => drawCharts());
                 }
             } catch (e) {
                 simStatus.value = 'FAILED';
-                simMessage.value = 'Request failed: ' + e.message;
+                simError.value = 'Request failed: ' + e.message;
+                activeTab.value = 'results';
             }
         }
 
@@ -665,7 +700,7 @@ createApp({
 
         return {
             caseType, caseInfo, params, categories, openCategories,
-            validationErrors, simStatus, simMessage, simOutput,
+            validationErrors, simStatus, simMessage, simOutput, simError,
             availableCases, jsonPreview, activeTab,
             timestepCanvas, cumulativeCanvas,
             processStages, numCycles, cycleDuration, totalDuration, stageColors,

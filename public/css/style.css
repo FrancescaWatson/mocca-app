@@ -34,15 +34,29 @@ body {
     padding: 1.5rem 2rem;
     text-align: center;
 }
+.header-title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+}
+.header-logo {
+    width: 52px;
+    height: 52px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.1);
+    padding: 4px;
+}
 .app-title {
     font-size: 1.75rem;
     font-weight: 700;
     letter-spacing: -0.02em;
+    text-align: left;
 }
 .app-subtitle {
     font-size: 0.95rem;
     opacity: 0.85;
     margin-top: 0.25rem;
+    text-align: left;
 }
 
 /* Navigation */
