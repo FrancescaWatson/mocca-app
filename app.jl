@@ -13,10 +13,10 @@ using JSON
 using Dates
 
 # Load MoccaApp modules
-if !isdefined(Main, :InputParameters)
+if !isdefined(@__MODULE__, :InputParameters)
     include(joinpath(@__DIR__, "src", "InputParameters.jl"))
 end
-if !isdefined(Main, :Simulation)
+if !isdefined(@__MODULE__, :Simulation)
     include(joinpath(@__DIR__, "src", "Simulation.jl"))
 end
 using .InputParameters
