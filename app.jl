@@ -106,6 +106,14 @@ route("/api/export", method=POST) do
     return Genie.Renderer.respond(json_str, :json)
 end
 
+route("/api/export_csv", method=POST) do
+    data = jsonpayload()
+    isnothing(data) && return Genie.Renderer.respond("Invalid JSON", :text, status=400)
+    output_data = get(data, "output", data)
+    csv_str = export_csv_results(output_data)
+    return Genie.Renderer.respond(csv_str, :text)
+end
+
 # ---------------------------------------------------------------------------
 # Server start
 # ---------------------------------------------------------------------------

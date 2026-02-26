@@ -586,3 +586,63 @@ body {
     gap: 1.5rem;
     flex-wrap: wrap;
 }
+
+/* Validation Indicator */
+.validation-indicator {
+    font-size: 0.85rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius);
+    transition: all 0.2s ease;
+}
+.validation-none {
+    color: var(--text-muted);
+    background: #f8fafc;
+    border: 1px solid var(--border);
+}
+.validation-valid {
+    color: var(--success);
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+}
+.validation-invalid {
+    color: var(--error);
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+}
+.validation-stale {
+    color: var(--text-muted);
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    opacity: 0.7;
+}
+
+/* Outlet Plots Grid */
+.outlet-plots-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+@media (max-width: 960px) {
+    .outlet-plots-grid { grid-template-columns: 1fr; }
+}
+.outlet-plot-item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    background: #fafbfc;
+}
+.outlet-plot-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+    text-align: center;
+}
+
+/* CSV Export Row */
+.export-csv-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}

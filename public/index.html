@@ -141,6 +141,14 @@
                     </button>
                 </div>
 
+                <!-- Validation Status Indicator -->
+                <div class="validation-indicator" :class="validationIndicatorClass" style="margin-top: 0.75rem;">
+                    <span v-if="validationState === 'valid'">✅ Parameters validated successfully</span>
+                    <span v-else-if="validationState === 'invalid'">❌ Validation failed — see errors above</span>
+                    <span v-else-if="validationState === 'stale'">⏳ Parameters changed since last validation</span>
+                    <span v-else>—</span>
+                </div>
+
                 <!-- Status -->
                 <div style="margin-top: 1rem;">
                     <div v-if="simStatus === 'IDLE'" class="status-idle">
@@ -190,7 +198,50 @@
             <div v-if="!simOutput && !simError" class="panel no-data" style="text-align:center; padding:3rem;">
                 <p>No simulation results yet. Run a simulation first.</p>
             </div>
-            <div v-else>
+            <div v-else-if="simOutput">
+                <!-- Outlet Plots (like Mocca.plot_outlet) -->
+                <div class="panel" style="margin-bottom:1.5rem;" v-if="simOutput.cum_time">
+                    <h3>🔬 Outlet Cell Variables</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
+                        Time series of primary variables at the column outlet (last cell), as in <code>Mocca.plot_outlet</code>.
+                    </p>
+                    <div class="outlet-plots-grid">
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_pressure">
+                            <div class="outlet-plot-title">Pressure [Pa]</div>
+                            <div class="chart-container"><canvas ref="outletPressureCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_temperature">
+                            <div class="outlet-plot-title">Temperature [K]</div>
+                            <div class="chart-container"><canvas ref="outletTemperatureCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_wall_temperature">
+                            <div class="outlet-plot-title">Wall Temperature [K]</div>
+                            <div class="chart-container"><canvas ref="outletWallTempCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_y_1">
+                            <div class="outlet-plot-title">Mole Fractions [-]</div>
+                            <div class="chart-container"><canvas ref="outletMoleFracCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_q_1">
+                            <div class="outlet-plot-title">Adsorbed Concentration [mol/m³]</div>
+                            <div class="chart-container"><canvas ref="outletAdsorbedCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CSV Export -->
+                <div class="panel" style="margin-bottom:1.5rem;" v-if="simOutput.cum_time">
+                    <h3>💾 Export Results</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+                        Export outlet cell results to CSV (same format as <code>Mocca.export_cell_results</code>).
+                    </p>
+                    <div class="export-csv-row">
+                        <input type="text" class="param-input" style="max-width:300px;"
+                               v-model="csvFilename" placeholder="results.csv">
+                        <button class="btn btn-primary" @click="exportCsv">📥 Export CSV</button>
+                    </div>
+                </div>
+
                 <!-- Results Summary Card -->
                 <div class="results-grid">
                     <div class="panel">
@@ -285,13 +336,24 @@ createApp({
         const categories = ref([]);
         const openCategories = reactive({});
         const validationErrors = ref([]);
+        const validationState = ref('none'); // 'none' | 'valid' | 'invalid' | 'stale'
         const simStatus = ref('IDLE');
         const simMessage = ref('');
         const simOutput = ref(null);
         const simError = ref(null);
         const activeTab = ref('params');
+        const csvFilename = ref('results.csv');
         const timestepCanvas = ref(null);
         const cumulativeCanvas = ref(null);
+        const outletPressureCanvas = ref(null);
+        const outletTemperatureCanvas = ref(null);
+        const outletWallTempCanvas = ref(null);
+        const outletMoleFracCanvas = ref(null);
+        const outletAdsorbedCanvas = ref(null);
+
+        const validationIndicatorClass = computed(() => {
+            return 'validation-' + validationState.value;
+        });
 
         const availableCases = [
             { key: 'cyclic', label: 'Cyclic VSA' },
@@ -382,6 +444,7 @@ createApp({
                     openCategories[data.categories[0].key] = true;
                 }
                 validationErrors.value = [];
+                validationState.value = 'none';
                 simStatus.value = 'IDLE';
                 simMessage.value = '';
                 simOutput.value = null;
@@ -419,6 +482,10 @@ createApp({
             if (cat) {
                 const field = cat.fields.find(f => f.key === fieldKey);
                 if (field) field.value = newValue;
+            }
+            // Mark validation as stale when any parameter changes
+            if (validationState.value === 'valid' || validationState.value === 'invalid') {
+                validationState.value = 'stale';
             }
         }
 
@@ -531,7 +598,10 @@ createApp({
                 const data = await resp.json();
                 validationErrors.value = data.errors || [];
                 if (data.valid) {
+                    validationState.value = 'valid';
                     simMessage.value = 'Parameters are valid.';
+                } else {
+                    validationState.value = 'invalid';
                 }
             } catch (e) {
                 console.error('Validation failed:', e);
@@ -589,11 +659,154 @@ createApp({
         }
 
         // ---- Canvas Chart Drawing ----
+        const lineColors = ['#8b5cf6', '#f59e0b', '#16a34a', '#dc2626', '#3b82f6', '#ec4899'];
+
         function drawCharts() {
             if (!simOutput.value || !simOutput.value.timesteps) return;
             const ts = simOutput.value.timesteps;
             drawTimestepChart(ts);
             drawCumulativeChart(ts);
+            drawOutletPlots();
+        }
+
+        function drawOutletPlots() {
+            const out = simOutput.value;
+            if (!out || !out.cum_time) return;
+            const t = out.cum_time;
+            const names = out.component_names || [];
+
+            // Pressure
+            if (out.outlet_pressure) {
+                drawLineChart(outletPressureCanvas.value, t, [out.outlet_pressure], null, 't [s]', 'P [Pa]');
+            }
+            // Temperature
+            if (out.outlet_temperature) {
+                drawLineChart(outletTemperatureCanvas.value, t, [out.outlet_temperature], null, 't [s]', 'T [K]');
+            }
+            // Wall Temperature
+            if (out.outlet_wall_temperature) {
+                drawLineChart(outletWallTempCanvas.value, t, [out.outlet_wall_temperature], null, 't [s]', 'Tw [K]');
+            }
+            // Mole fractions (multi-series)
+            const ySeries = [], yLabels = [];
+            for (let k = 1; k <= names.length; k++) {
+                const key = 'outlet_y_' + k;
+                if (out[key]) { ySeries.push(out[key]); yLabels.push('y(' + names[k-1] + ')'); }
+            }
+            if (ySeries.length > 0) {
+                drawLineChart(outletMoleFracCanvas.value, t, ySeries, yLabels, 't [s]', 'y [-]');
+            }
+            // Adsorbed concentration (multi-series)
+            const qSeries = [], qLabels = [];
+            for (let k = 1; k <= names.length; k++) {
+                const key = 'outlet_q_' + k;
+                if (out[key]) { qSeries.push(out[key]); qLabels.push('q(' + names[k-1] + ')'); }
+            }
+            if (qSeries.length > 0) {
+                drawLineChart(outletAdsorbedCanvas.value, t, qSeries, qLabels, 't [s]', 'q [mol/m³]');
+            }
+        }
+
+        /** Generic multi-series line chart on a canvas */
+        function drawLineChart(canvas, xData, ySeriesArr, labels, xLabel, yLabel) {
+            if (!canvas || !xData || xData.length === 0) return;
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            const pad = { top: 20, right: (labels ? 100 : 20), bottom: 40, left: 65 };
+            const plotW = W - pad.left - pad.right;
+            const plotH = H - pad.top - pad.bottom;
+            const n = xData.length;
+
+            ctx.clearRect(0, 0, W, H);
+
+            // Compute y range
+            let yMin = Infinity, yMax = -Infinity;
+            for (const series of ySeriesArr) {
+                for (const v of series) { if (v < yMin) yMin = v; if (v > yMax) yMax = v; }
+            }
+            if (yMin === yMax) { const delta = Math.abs(yMin) * 0.1 || 1; yMin -= delta; yMax += delta; }
+            const yPad = (yMax - yMin) * 0.05;
+            yMin -= yPad; yMax += yPad;
+            const xMin = xData[0], xMax = xData[n - 1] || 1;
+
+            // Grid & Y labels
+            ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.top + plotH - (i / 4) * plotH;
+                ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+                ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+                const val = yMin + (yMax - yMin) * i / 4;
+                ctx.fillText(formatTickLabel(val), pad.left - 6, y + 3);
+            }
+
+            // Draw series
+            for (let s = 0; s < ySeriesArr.length; s++) {
+                const series = ySeriesArr[s];
+                ctx.strokeStyle = lineColors[s % lineColors.length];
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                for (let i = 0; i < n; i++) {
+                    const x = pad.left + ((xData[i] - xMin) / (xMax - xMin || 1)) * plotW;
+                    const y = pad.top + plotH - ((series[i] - yMin) / (yMax - yMin || 1)) * plotH;
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            }
+
+            // Legend (if labels)
+            if (labels && labels.length > 1) {
+                const lx = pad.left + plotW + 8;
+                let ly = pad.top + 10;
+                ctx.font = '10px sans-serif';
+                for (let s = 0; s < labels.length; s++) {
+                    ctx.fillStyle = lineColors[s % lineColors.length];
+                    ctx.fillRect(lx, ly - 4, 12, 3);
+                    ctx.fillStyle = '#1e293b'; ctx.textAlign = 'left';
+                    ctx.fillText(labels[s], lx + 16, ly);
+                    ly += 16;
+                }
+            }
+
+            // Axis labels
+            ctx.fillStyle = '#1e293b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText(xLabel, pad.left + plotW / 2, H - 5);
+            ctx.save(); ctx.translate(12, pad.top + plotH / 2); ctx.rotate(-Math.PI / 2);
+            ctx.fillText(yLabel, 0, 0); ctx.restore();
+        }
+
+        function formatTickLabel(v) {
+            const abs = Math.abs(v);
+            if (abs === 0) return '0';
+            if (abs >= 1e5 || abs < 0.01) return v.toExponential(2);
+            if (abs < 1) return v.toFixed(4);
+            if (abs < 100) return v.toFixed(2);
+            return v.toFixed(1);
+        }
+
+        function exportCsv() {
+            if (!simOutput.value) return;
+            // Use the server endpoint to generate proper CSV
+            fetch('/api/export_csv', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ output: simOutput.value }),
+            })
+            .then(resp => resp.text())
+            .then(csvText => {
+                const csvBlob = new Blob([csvText], { type: 'text/csv' });
+                const url = URL.createObjectURL(csvBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = csvFilename.value || 'results.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => {
+                console.error('CSV export failed:', err);
+                alert('CSV export failed: ' + err.message);
+            });
         }
 
         function drawTimestepChart(timesteps) {
@@ -700,13 +913,16 @@ createApp({
 
         return {
             caseType, caseInfo, params, categories, openCategories,
-            validationErrors, simStatus, simMessage, simOutput, simError,
-            availableCases, jsonPreview, activeTab,
+            validationErrors, validationState, validationIndicatorClass,
+            simStatus, simMessage, simOutput, simError,
+            availableCases, jsonPreview, activeTab, csvFilename,
             timestepCanvas, cumulativeCanvas,
+            outletPressureCanvas, outletTemperatureCanvas, outletWallTempCanvas,
+            outletMoleFracCanvas, outletAdsorbedCanvas,
             processStages, numCycles, cycleDuration, totalDuration, stageColors,
             selectCase, toggleCategory, getStep, formatNumber,
             onParamChange, onArrayParamChange, onObjectParamChange,
-            resetDefaults, loadJsonFile, exportJson,
+            resetDefaults, loadJsonFile, exportJson, exportCsv,
             validateParams, runSimulation,
             JSON
         };
