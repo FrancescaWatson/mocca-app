@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MoccaApp – CO₂ Adsorption Simulation Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div id="app">
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-content">
+            <div class="header-title-row">
+                <img src="/img/mocca-logo.svg" alt="Mocca.jl logo" class="header-logo">
+                <div>
+                    <h1 class="app-title">MoccaApp</h1>
+                    <p class="app-subtitle">CO₂ Adsorption Simulation Dashboard — Powered by <a href="https://github.com/sintefmath/Mocca.jl" style="color:#c4b5fd;">Mocca.jl</a></p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Case Type Navigation -->
+    <nav class="case-nav">
+        <div class="nav-section">
+            <span class="nav-label">Simulation Type:</span>
+            <button v-for="c in availableCases" :key="c.key"
+                    class="case-btn" :class="{ active: caseType === c.key }"
+                    @click="selectCase(c.key)">
+                {{ c.label }}
+            </button>
+        </div>
+    </nav>
+
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+        <button class="tab-btn" :class="{ active: activeTab === 'params' }" @click="activeTab = 'params'">
+            ⚙️ Parameters
+        </button>
+        <button class="tab-btn" :class="{ active: activeTab === 'results' }" @click="activeTab = 'results'"
+                :disabled="!simOutput && !simError">
+            📊 Results
+        </button>
+    </div>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Case Description -->
+        <div class="case-description" v-if="caseInfo">
+            <h2>{{ caseInfo.label }}</h2>
+            <p>{{ caseInfo.description }}</p>
+        </div>
+
+        <!-- Parameters Tab -->
+        <div v-show="activeTab === 'params'" class="content-grid">
+            <!-- Left: Parameters Panel -->
+            <div class="panel">
+                <h3>⚙️ Input Parameters</h3>
+
+                <!-- Actions Bar -->
+                <div class="actions-bar" style="margin-top:0; margin-bottom:1rem; border-top:none; padding-top:0;">
+                    <label class="file-upload-label">
+                        📂 Load JSON
+                        <input type="file" accept=".json" class="file-upload-input" @change="loadJsonFile">
+                    </label>
+                    <button class="btn btn-secondary" @click="exportJson">💾 Export JSON</button>
+                    <button class="btn btn-secondary" @click="resetDefaults">🔄 Reset Defaults</button>
+                </div>
+
+                <!-- Parameter Categories (Accordion) -->
+                <div class="param-list" v-if="categories.length > 0">
+                    <div v-for="cat in categories" :key="cat.key" class="category-section">
+                        <div class="category-header"
+                             :class="{ active: openCategories[cat.key] }"
+                             @click="toggleCategory(cat.key)">
+                            <span>{{ cat.label }}</span>
+                            <span class="category-toggle" :class="{ open: openCategories[cat.key] }">▶</span>
+                        </div>
+                        <div class="category-fields" v-show="openCategories[cat.key]">
+                            <div v-for="field in cat.fields" :key="field.key" class="param-item">
+                                <div class="param-header">
+                                    <span class="param-label" :title="field.name">
+                                        {{ field.name }}
+                                        <span v-if="field.symbol" class="param-symbol">({{ field.symbol }})</span>
+                                    </span>
+                                    <span v-if="field.units && field.units !== 'dimensionless'" class="param-unit">{{ field.units }}</span>
+                                </div>
+                                <!-- Array values -->
+                                <input v-if="Array.isArray(field.value)"
+                                       class="param-input is-array"
+                                       :value="JSON.stringify(field.value)"
+                                       @change="onArrayParamChange(cat.key, field.key, $event)">
+                                <!-- String values -->
+                                <template v-else-if="typeof field.value === 'string'">
+                                    <input class="param-input"
+                                           :value="field.value"
+                                           @change="onParamChange(cat.key, field.key, $event.target.value)">
+                                </template>
+                                <!-- Object values (timestep selectors, etc.) -->
+                                <template v-else-if="typeof field.value === 'object' && field.value !== null && !Array.isArray(field.value)">
+                                    <input class="param-input is-array"
+                                           :value="JSON.stringify(field.value)"
+                                           @change="onObjectParamChange(cat.key, field.key, $event)">
+                                </template>
+                                <!-- Numeric values -->
+                                <input v-else
+                                       type="number"
+                                       class="param-input"
+                                       :value="field.value"
+                                       :step="getStep(field.value)"
+                                       @change="onParamChange(cat.key, field.key, parseFloat($event.target.value))">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div v-else class="no-data">Loading parameters...</div>
+
+                <!-- Validation Errors -->
+                <div v-if="validationErrors.length > 0" class="validation-errors">
+                    <h4>⚠️ Validation Errors</h4>
+                    <ul>
+                        <li v-for="err in validationErrors" :key="err.field">
+                            <strong>{{ err.field }}:</strong> {{ err.message }}
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Right: Simulation & Results Panel -->
+            <div class="panel">
+                <h3>🚀 Simulation</h3>
+
+                <!-- Run Simulation -->
+                <div class="actions-bar" style="margin-top:0; border-top:none; padding-top:0;">
+                    <button class="btn btn-success" @click="runSimulation" :disabled="simStatus === 'RUNNING'">
+                        ▶ Run Simulation
+                    </button>
+                    <button class="btn btn-primary" @click="validateParams">
+                        ✓ Validate
+                    </button>
+                </div>
+
+                <!-- Validation Status Indicator -->
+                <div class="validation-indicator" :class="validationIndicatorClass" style="margin-top: 0.75rem;">
+                    <span v-if="validationState === 'valid'">✅ Parameters validated successfully</span>
+                    <span v-else-if="validationState === 'invalid'">❌ Validation failed — see errors above</span>
+                    <span v-else-if="validationState === 'stale'">⏳ Parameters changed since last validation</span>
+                    <span v-else>—</span>
+                </div>
+
+                <!-- Status -->
+                <div style="margin-top: 1rem;">
+                    <div v-if="simStatus === 'IDLE'" class="status-idle">
+                        Ready to simulate. Configure parameters and click "Run Simulation".
+                    </div>
+                    <div v-if="simStatus === 'RUNNING'" class="status-running">
+                        <span class="spinner"></span> Running simulation... This may take a moment.
+                    </div>
+                    <div v-if="simStatus === 'COMPLETED'" class="status-completed">
+                        ✅ {{ simMessage }}
+                    </div>
+                </div>
+
+                <!-- Results Summary -->
+                <div v-if="simOutput && simStatus === 'COMPLETED'" class="result-summary">
+                    <h4>Results Summary</h4>
+                    <table class="summary-table">
+                        <tr v-if="simOutput.num_states">
+                            <td class="summary-label">Total timesteps</td>
+                            <td class="summary-value">{{ simOutput.num_states }}</td>
+                        </tr>
+                        <tr v-if="simOutput.total_time">
+                            <td class="summary-label">Total simulation time</td>
+                            <td class="summary-value">{{ formatNumber(simOutput.total_time) }} s</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- JSON Preview -->
+                <div class="json-preview" style="margin-top: 1.5rem;">
+                    <h3 style="border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 0.75rem;">
+                        📋 JSON Preview
+                    </h3>
+                    <pre>{{ jsonPreview }}</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Tab -->
+        <div v-show="activeTab === 'results'" class="results-content">
+            <!-- Simulation Error -->
+            <div v-if="simError" class="panel" style="margin-bottom:1.5rem;">
+                <div class="status-failed">
+                    ❌ {{ simError }}
+                </div>
+            </div>
+            <div v-if="!simOutput && !simError" class="panel no-data" style="text-align:center; padding:3rem;">
+                <p>No simulation results yet. Run a simulation first.</p>
+            </div>
+            <div v-else-if="simOutput">
+                <!-- Outlet Plots (like Mocca.plot_outlet) -->
+                <div class="panel" style="margin-bottom:1.5rem;" v-if="simOutput.cum_time">
+                    <h3>🔬 Outlet Cell Variables</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem;">
+                        Time series of primary variables at the column outlet (last cell), as in <code>Mocca.plot_outlet</code>.
+                    </p>
+                    <div class="outlet-plots-grid">
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_pressure">
+                            <div class="outlet-plot-title">Pressure [Pa]</div>
+                            <div class="chart-container"><canvas ref="outletPressureCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_temperature">
+                            <div class="outlet-plot-title">Temperature [K]</div>
+                            <div class="chart-container"><canvas ref="outletTemperatureCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_wall_temperature">
+                            <div class="outlet-plot-title">Wall Temperature [K]</div>
+                            <div class="chart-container"><canvas ref="outletWallTempCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_y_1">
+                            <div class="outlet-plot-title">Mole Fractions [-]</div>
+                            <div class="chart-container"><canvas ref="outletMoleFracCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                        <div class="outlet-plot-item" v-if="simOutput.outlet_q_1">
+                            <div class="outlet-plot-title">Adsorbed Concentration [mol/m³]</div>
+                            <div class="chart-container"><canvas ref="outletAdsorbedCanvas" width="460" height="240"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CSV Export -->
+                <div class="panel" style="margin-bottom:1.5rem;" v-if="simOutput.cum_time">
+                    <h3>💾 Export Results</h3>
+                    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+                        Export outlet cell results to CSV (same format as <code>Mocca.export_cell_results</code>).
+                    </p>
+                    <div class="export-csv-row">
+                        <input type="text" class="param-input" style="max-width:300px;"
+                               v-model="csvFilename" placeholder="results.csv">
+                        <button class="btn btn-primary" @click="exportCsv">📥 Export CSV</button>
+                    </div>
+                </div>
+
+                <!-- Results Summary Card -->
+                <div class="results-grid">
+                    <div class="panel">
+                        <h3>📈 Simulation Summary</h3>
+                        <table class="summary-table">
+                            <tr>
+                                <td class="summary-label">Status</td>
+                                <td class="summary-value">
+                                    <span class="status-badge" :class="'badge-' + simStatus.toLowerCase()">{{ simStatus }}</span>
+                                </td>
+                            </tr>
+                            <tr v-if="simOutput.num_states">
+                                <td class="summary-label">Total timesteps</td>
+                                <td class="summary-value">{{ simOutput.num_states }}</td>
+                            </tr>
+                            <tr v-if="simOutput.total_time">
+                                <td class="summary-label">Total simulation time</td>
+                                <td class="summary-value">{{ formatNumber(simOutput.total_time) }} s</td>
+                            </tr>
+                            <tr v-if="simOutput.timesteps">
+                                <td class="summary-label">Number of output steps</td>
+                                <td class="summary-value">{{ simOutput.timesteps.length }}</td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- Timestep Plot -->
+                    <div class="panel">
+                        <h3>⏱️ Timestep Sizes</h3>
+                        <div v-if="simOutput.timesteps && simOutput.timesteps.length > 0" class="chart-container">
+                            <canvas ref="timestepCanvas" width="500" height="280"></canvas>
+                        </div>
+                        <div v-else class="no-data">No timestep data available.</div>
+                    </div>
+                </div>
+
+                <!-- Cumulative Time Plot -->
+                <div class="results-grid" style="margin-top:1.5rem;">
+                    <div class="panel">
+                        <h3>📊 Cumulative Simulation Time</h3>
+                        <div v-if="simOutput.timesteps && simOutput.timesteps.length > 0" class="chart-container">
+                            <canvas ref="cumulativeCanvas" width="500" height="280"></canvas>
+                        </div>
+                        <div v-else class="no-data">No timestep data available.</div>
+                    </div>
+
+                    <!-- Process Stage Info -->
+                    <div class="panel">
+                        <h3>🔄 Process Configuration</h3>
+                        <div v-if="processStages.length > 0">
+                            <div v-for="(stage, idx) in processStages" :key="idx" class="stage-item">
+                                <span class="stage-badge" :style="{background: stageColors[idx % stageColors.length]}">
+                                    {{ idx + 1 }}
+                                </span>
+                                <span class="stage-name">{{ stage.type }}</span>
+                                <span class="stage-duration">{{ stage.duration }} s</span>
+                            </div>
+                            <div class="stage-summary">
+                                <div>Cycles: <strong>{{ numCycles }}</strong></div>
+                                <div>Cycle duration: <strong>{{ formatNumber(cycleDuration) }} s</strong></div>
+                                <div>Total duration: <strong>{{ formatNumber(totalDuration) }} s</strong></div>
+                            </div>
+                        </div>
+                        <div v-else class="no-data">No process configuration found.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <p>
+            <strong>MoccaApp</strong> — A web interface for
+            <a href="https://github.com/sintefmath/Mocca.jl" target="_blank">Mocca.jl</a>
+            · Built with <a href="https://genieframework.com/" target="_blank">Genie.jl</a>
+            and <a href="https://vuejs.org/" target="_blank">Vue.js</a>
+        </p>
+    </footer>
+</div>
+
+<!-- Vue.js 3 -->
+<script src="/js/vue.global.prod.js"></script>
+<script>
+const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue;
+
+createApp({
+    setup() {
+        const caseType = ref('cyclic');
+        const caseInfo = ref(null);
+        const params = ref({});
+        const categories = ref([]);
+        const openCategories = reactive({});
+        const validationErrors = ref([]);
+        const validationState = ref('none'); // 'none' | 'valid' | 'invalid' | 'stale'
+        const simStatus = ref('IDLE');
+        const simMessage = ref('');
+        const simOutput = ref(null);
+        const simError = ref(null);
+        const activeTab = ref('params');
+        const csvFilename = ref('results.csv');
+        const timestepCanvas = ref(null);
+        const cumulativeCanvas = ref(null);
+        const outletPressureCanvas = ref(null);
+        const outletTemperatureCanvas = ref(null);
+        const outletWallTempCanvas = ref(null);
+        const outletMoleFracCanvas = ref(null);
+        const outletAdsorbedCanvas = ref(null);
+
+        const validationIndicatorClass = computed(() => {
+            return 'validation-' + validationState.value;
+        });
+
+        const availableCases = [
+            { key: 'cyclic', label: 'Cyclic VSA' },
+            { key: 'dcb', label: 'Direct Column Breakthrough' },
+        ];
+
+        const stageColors = ['#8b5cf6', '#f59e0b', '#16a34a', '#dc2626', '#3b82f6', '#ec4899'];
+
+        const jsonPreview = computed(() => {
+            try {
+                return JSON.stringify(params.value, null, 2);
+            } catch {
+                return '{}';
+            }
+        });
+
+        // Computed: process stages from params
+        const processStages = computed(() => {
+            const p = params.value;
+            if (!p || !p.processSpecification) return [];
+            const spec = p.processSpecification;
+            const types = extractValue(spec, 'stage_types') || [];
+            const durations = extractValue(spec, 'stage_durations') || [];
+            const stages = [];
+            for (let i = 0; i < types.length; i++) {
+                stages.push({
+                    type: types[i] || 'unknown',
+                    duration: durations[i] || 0,
+                });
+            }
+            return stages;
+        });
+
+        const numCycles = computed(() => {
+            const p = params.value;
+            if (!p || !p.processSpecification) return 0;
+            return extractValue(p.processSpecification, 'num_cycles') || 0;
+        });
+
+        const cycleDuration = computed(() => {
+            return processStages.value.reduce((s, st) => s + st.duration, 0);
+        });
+
+        const totalDuration = computed(() => {
+            return cycleDuration.value * numCycles.value;
+        });
+
+        function extractValue(section, key) {
+            if (!section || !section[key]) return null;
+            const v = section[key];
+            if (typeof v === 'object' && v !== null && 'value' in v) return v.value;
+            return v;
+        }
+
+        function getStep(value) {
+            if (!value || typeof value !== 'number') return 1;
+            const abs = Math.abs(value);
+            if (abs === 0) return 1;
+            if (abs < 0.001) return 0.0001;
+            if (abs < 0.01) return 0.001;
+            if (abs < 0.1) return 0.01;
+            if (abs < 1) return 0.1;
+            if (abs < 100) return 1;
+            if (abs < 10000) return 10;
+            return 100;
+        }
+
+        function formatNumber(v) {
+            if (typeof v !== 'number') return v;
+            return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+        }
+
+        async function loadCaseDefaults(caseName) {
+            try {
+                const resp = await fetch('/api/defaults/' + caseName);
+                if (!resp.ok) throw new Error(await resp.text());
+                const data = await resp.json();
+                caseInfo.value = { label: data.label, description: data.description };
+                params.value = data.params;
+                categories.value = data.categories;
+                // Open first category by default
+                for (const cat of data.categories) {
+                    if (!(cat.key in openCategories)) {
+                        openCategories[cat.key] = false;
+                    }
+                }
+                if (data.categories.length > 0) {
+                    openCategories[data.categories[0].key] = true;
+                }
+                validationErrors.value = [];
+                validationState.value = 'none';
+                simStatus.value = 'IDLE';
+                simMessage.value = '';
+                simOutput.value = null;
+                simError.value = null;
+            } catch (e) {
+                console.error('Failed to load defaults:', e);
+            }
+        }
+
+        function selectCase(caseName) {
+            caseType.value = caseName;
+            loadCaseDefaults(caseName);
+        }
+
+        function toggleCategory(catKey) {
+            openCategories[catKey] = !openCategories[catKey];
+        }
+
+        function isDetailed() {
+            const p = params.value;
+            return p && p.columnProps && typeof p.columnProps.L === 'object' && p.columnProps.L !== null && 'value' in p.columnProps.L;
+        }
+
+        function onParamChange(catKey, fieldKey, newValue) {
+            if (isDetailed()) {
+                if (params.value[catKey] && params.value[catKey][fieldKey] && typeof params.value[catKey][fieldKey] === 'object' && 'value' in params.value[catKey][fieldKey]) {
+                    params.value[catKey][fieldKey]['value'] = newValue;
+                }
+            } else {
+                if (params.value[catKey]) {
+                    params.value[catKey][fieldKey] = newValue;
+                }
+            }
+            const cat = categories.value.find(c => c.key === catKey);
+            if (cat) {
+                const field = cat.fields.find(f => f.key === fieldKey);
+                if (field) field.value = newValue;
+            }
+            // Mark validation as stale when any parameter changes
+            if (validationState.value === 'valid' || validationState.value === 'invalid') {
+                validationState.value = 'stale';
+            }
+        }
+
+        function onArrayParamChange(catKey, fieldKey, event) {
+            try {
+                const parsed = JSON.parse(event.target.value);
+                if (Array.isArray(parsed)) {
+                    onParamChange(catKey, fieldKey, parsed);
+                }
+            } catch {
+                console.warn('Invalid array input');
+            }
+        }
+
+        function onObjectParamChange(catKey, fieldKey, event) {
+            try {
+                const parsed = JSON.parse(event.target.value);
+                if (typeof parsed === 'object' && parsed !== null) {
+                    onParamChange(catKey, fieldKey, parsed);
+                }
+            } catch {
+                console.warn('Invalid object input');
+            }
+        }
+
+        function resetDefaults() {
+            loadCaseDefaults(caseType.value);
+        }
+
+        function loadJsonFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    params.value = data;
+                    categories.value = buildCategories(data);
+                } catch (err) {
+                    alert('Failed to parse JSON file: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
+        function buildCategories(data) {
+            const catOrder = [
+                'physicalConstants', 'dslPars', 'adsorbentProps', 'columnProps',
+                'feedProps', 'boundaryConditions', 'initialConditions',
+                'processSpecification', 'simulation', 'solver'
+            ];
+            const catLabels = {
+                physicalConstants: 'Physical Constants',
+                dslPars: 'Dual-Site Langmuir Parameters',
+                adsorbentProps: 'Adsorbent Properties',
+                columnProps: 'Column Properties',
+                feedProps: 'Feed Gas Properties',
+                boundaryConditions: 'Boundary Conditions',
+                initialConditions: 'Initial Conditions',
+                processSpecification: 'Process Specification',
+                simulation: 'Simulation Settings',
+                solver: 'Solver Settings',
+            };
+            const isDetailed = data.columnProps && typeof data.columnProps.L === 'object'
+                             && data.columnProps.L !== null && 'value' in data.columnProps.L;
+            const cats = [];
+            for (const key of catOrder) {
+                if (!data[key] || typeof data[key] !== 'object') continue;
+                const fields = [];
+                for (const [fk, fv] of Object.entries(data[key])) {
+                    if (isDetailed && typeof fv === 'object' && fv !== null && 'value' in fv) {
+                        const desc = fv.description || {};
+                        fields.push({
+                            key: fk,
+                            value: fv.value,
+                            name: desc.name || fk,
+                            symbol: desc.symbol || '',
+                            units: desc.units || '',
+                        });
+                    } else {
+                        fields.push({ key: fk, value: fv, name: fk, symbol: '', units: '' });
+                    }
+                }
+                cats.push({ key: key, label: catLabels[key] || key, fields: fields });
+            }
+            return cats;
+        }
+
+        function exportJson() {
+            const json = JSON.stringify(params.value, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = caseType.value + '_input.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function validateParams() {
+            try {
+                const resp = await fetch('/api/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ params: params.value }),
+                });
+                const data = await resp.json();
+                validationErrors.value = data.errors || [];
+                if (data.valid) {
+                    validationState.value = 'valid';
+                    simMessage.value = 'Parameters are valid.';
+                } else {
+                    validationState.value = 'invalid';
+                }
+            } catch (e) {
+                console.error('Validation failed:', e);
+            }
+        }
+
+        async function runSimulation() {
+            simStatus.value = 'RUNNING';
+            simMessage.value = '';
+            simOutput.value = null;
+            simError.value = null;
+            validationErrors.value = [];
+            try {
+                const resp = await fetch('/api/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ params: params.value }),
+                });
+                const data = await resp.json();
+                simStatus.value = data.status;
+                simMessage.value = data.message;
+                simOutput.value = data.output || null;
+                if (data.status === 'FAILED') {
+                    // Check if the failure is a validation error
+                    const isValidationError = data.message && (
+                        data.message.includes('Missing required section') ||
+                        data.message.includes('must be positive') ||
+                        data.message.includes('must be between') ||
+                        data.message.includes('must be at least')
+                    );
+                    if (isValidationError) {
+                        // Show validation errors on params tab
+                        const parts = data.message.split('; ');
+                        validationErrors.value = parts.map(p => {
+                            const idx = p.indexOf(': ');
+                            return idx > 0
+                                ? { field: p.substring(0, idx), message: p.substring(idx + 2) }
+                                : { field: 'validation', message: p };
+                        });
+                        activeTab.value = 'params';
+                    } else {
+                        // Show simulation error on results tab
+                        simError.value = data.message;
+                        activeTab.value = 'results';
+                    }
+                } else if (data.output) {
+                    activeTab.value = 'results';
+                    nextTick(() => drawCharts());
+                }
+            } catch (e) {
+                simStatus.value = 'FAILED';
+                simError.value = 'Request failed: ' + e.message;
+                activeTab.value = 'results';
+            }
+        }
+
+        // ---- Canvas Chart Drawing ----
+        const lineColors = ['#8b5cf6', '#f59e0b', '#16a34a', '#dc2626', '#3b82f6', '#ec4899'];
+
+        function drawCharts() {
+            if (!simOutput.value || !simOutput.value.timesteps) return;
+            const ts = simOutput.value.timesteps;
+            drawTimestepChart(ts);
+            drawCumulativeChart(ts);
+            drawOutletPlots();
+        }
+
+        function drawOutletPlots() {
+            const out = simOutput.value;
+            if (!out || !out.cum_time) return;
+            const t = out.cum_time;
+            const names = out.component_names || [];
+
+            // Pressure
+            if (out.outlet_pressure) {
+                drawLineChart(outletPressureCanvas.value, t, [out.outlet_pressure], null, 't [s]', 'P [Pa]');
+            }
+            // Temperature
+            if (out.outlet_temperature) {
+                drawLineChart(outletTemperatureCanvas.value, t, [out.outlet_temperature], null, 't [s]', 'T [K]');
+            }
+            // Wall Temperature
+            if (out.outlet_wall_temperature) {
+                drawLineChart(outletWallTempCanvas.value, t, [out.outlet_wall_temperature], null, 't [s]', 'Tw [K]');
+            }
+            // Mole fractions (multi-series)
+            const ySeries = [], yLabels = [];
+            for (let k = 1; k <= names.length; k++) {
+                const key = 'outlet_y_' + k;
+                if (out[key]) { ySeries.push(out[key]); yLabels.push('y(' + names[k-1] + ')'); }
+            }
+            if (ySeries.length > 0) {
+                drawLineChart(outletMoleFracCanvas.value, t, ySeries, yLabels, 't [s]', 'y [-]');
+            }
+            // Adsorbed concentration (multi-series)
+            const qSeries = [], qLabels = [];
+            for (let k = 1; k <= names.length; k++) {
+                const key = 'outlet_q_' + k;
+                if (out[key]) { qSeries.push(out[key]); qLabels.push('q(' + names[k-1] + ')'); }
+            }
+            if (qSeries.length > 0) {
+                drawLineChart(outletAdsorbedCanvas.value, t, qSeries, qLabels, 't [s]', 'q [mol/m³]');
+            }
+        }
+
+        /** Generic multi-series line chart on a canvas */
+        function drawLineChart(canvas, xData, ySeriesArr, labels, xLabel, yLabel) {
+            if (!canvas || !xData || xData.length === 0) return;
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            const pad = { top: 20, right: (labels ? 100 : 20), bottom: 40, left: 65 };
+            const plotW = W - pad.left - pad.right;
+            const plotH = H - pad.top - pad.bottom;
+            const n = xData.length;
+
+            ctx.clearRect(0, 0, W, H);
+
+            // Compute y range
+            let yMin = Infinity, yMax = -Infinity;
+            for (const series of ySeriesArr) {
+                for (const v of series) { if (v < yMin) yMin = v; if (v > yMax) yMax = v; }
+            }
+            if (yMin === yMax) { const delta = Math.abs(yMin) * 0.1 || 1; yMin -= delta; yMax += delta; }
+            const yPad = (yMax - yMin) * 0.05;
+            yMin -= yPad; yMax += yPad;
+            const xMin = xData[0], xMax = xData[n - 1] || 1;
+
+            // Grid & Y labels
+            ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.top + plotH - (i / 4) * plotH;
+                ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+                ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+                const val = yMin + (yMax - yMin) * i / 4;
+                ctx.fillText(formatTickLabel(val), pad.left - 6, y + 3);
+            }
+
+            // Draw series
+            for (let s = 0; s < ySeriesArr.length; s++) {
+                const series = ySeriesArr[s];
+                ctx.strokeStyle = lineColors[s % lineColors.length];
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                for (let i = 0; i < n; i++) {
+                    const x = pad.left + ((xData[i] - xMin) / (xMax - xMin || 1)) * plotW;
+                    const y = pad.top + plotH - ((series[i] - yMin) / (yMax - yMin || 1)) * plotH;
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            }
+
+            // Legend (if labels)
+            if (labels && labels.length > 1) {
+                const lx = pad.left + plotW + 8;
+                let ly = pad.top + 10;
+                ctx.font = '10px sans-serif';
+                for (let s = 0; s < labels.length; s++) {
+                    ctx.fillStyle = lineColors[s % lineColors.length];
+                    ctx.fillRect(lx, ly - 4, 12, 3);
+                    ctx.fillStyle = '#1e293b'; ctx.textAlign = 'left';
+                    ctx.fillText(labels[s], lx + 16, ly);
+                    ly += 16;
+                }
+            }
+
+            // Axis labels
+            ctx.fillStyle = '#1e293b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText(xLabel, pad.left + plotW / 2, H - 5);
+            ctx.save(); ctx.translate(12, pad.top + plotH / 2); ctx.rotate(-Math.PI / 2);
+            ctx.fillText(yLabel, 0, 0); ctx.restore();
+        }
+
+        function formatTickLabel(v) {
+            const abs = Math.abs(v);
+            if (abs === 0) return '0';
+            if (abs >= 1e5 || abs < 0.01) return v.toExponential(2);
+            if (abs < 1) return v.toFixed(4);
+            if (abs < 100) return v.toFixed(2);
+            return v.toFixed(1);
+        }
+
+        function exportCsv() {
+            if (!simOutput.value) return;
+            // Use the server endpoint to generate proper CSV
+            fetch('/api/export_csv', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ output: simOutput.value }),
+            })
+            .then(resp => resp.text())
+            .then(csvText => {
+                const csvBlob = new Blob([csvText], { type: 'text/csv' });
+                const url = URL.createObjectURL(csvBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = csvFilename.value || 'results.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => {
+                console.error('CSV export failed:', err);
+                alert('CSV export failed: ' + err.message);
+            });
+        }
+
+        function drawTimestepChart(timesteps) {
+            const canvas = timestepCanvas.value;
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            const pad = { top: 20, right: 20, bottom: 40, left: 60 };
+            const plotW = W - pad.left - pad.right;
+            const plotH = H - pad.top - pad.bottom;
+
+            ctx.clearRect(0, 0, W, H);
+
+            const maxVal = Math.max(...timesteps);
+            const n = timesteps.length;
+
+            // Grid
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.top + plotH - (i / 4) * plotH;
+                ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+                ctx.fillStyle = '#64748b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+                ctx.fillText((maxVal * i / 4).toFixed(2), pad.left - 8, y + 4);
+            }
+
+            // Bars
+            const barW = Math.max(1, plotW / n - 1);
+            ctx.fillStyle = '#8b5cf6';
+            for (let i = 0; i < n; i++) {
+                const x = pad.left + (i / n) * plotW;
+                const h = (timesteps[i] / maxVal) * plotH;
+                ctx.fillRect(x, pad.top + plotH - h, barW, h);
+            }
+
+            // Axes labels
+            ctx.fillStyle = '#1e293b'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('Timestep index', W / 2, H - 5);
+            ctx.save(); ctx.translate(14, H / 2); ctx.rotate(-Math.PI / 2);
+            ctx.fillText('Δt (s)', 0, 0); ctx.restore();
+        }
+
+        function drawCumulativeChart(timesteps) {
+            const canvas = cumulativeCanvas.value;
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            const pad = { top: 20, right: 20, bottom: 40, left: 60 };
+            const plotW = W - pad.left - pad.right;
+            const plotH = H - pad.top - pad.bottom;
+
+            ctx.clearRect(0, 0, W, H);
+
+            // Cumulative sum
+            const cumul = [];
+            let sum = 0;
+            for (const dt of timesteps) { sum += dt; cumul.push(sum); }
+            const maxT = cumul[cumul.length - 1] || 1;
+            const n = cumul.length;
+
+            // Grid
+            ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.top + plotH - (i / 4) * plotH;
+                ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+                ctx.fillStyle = '#64748b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+                ctx.fillText((maxT * i / 4).toFixed(1), pad.left - 8, y + 4);
+            }
+
+            // Line
+            ctx.strokeStyle = '#16a34a'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < n; i++) {
+                const x = pad.left + (i / (n - 1 || 1)) * plotW;
+                const y = pad.top + plotH - (cumul[i] / maxT) * plotH;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // Fill under curve
+            ctx.lineTo(pad.left + plotW, pad.top + plotH);
+            ctx.lineTo(pad.left, pad.top + plotH);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(22, 163, 74, 0.1)';
+            ctx.fill();
+
+            // Axes labels
+            ctx.fillStyle = '#1e293b'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('Timestep index', W / 2, H - 5);
+            ctx.save(); ctx.translate(14, H / 2); ctx.rotate(-Math.PI / 2);
+            ctx.fillText('Time (s)', 0, 0); ctx.restore();
+        }
+
+        // Watch for tab change to results to draw charts
+        watch(activeTab, (newTab) => {
+            if (newTab === 'results' && simOutput.value) {
+                nextTick(() => drawCharts());
+            }
+        });
+
+        onMounted(() => {
+            loadCaseDefaults(caseType.value);
+        });
+
+        return {
+            caseType, caseInfo, params, categories, openCategories,
+            validationErrors, validationState, validationIndicatorClass,
+            simStatus, simMessage, simOutput, simError,
+            availableCases, jsonPreview, activeTab, csvFilename,
+            timestepCanvas, cumulativeCanvas,
+            outletPressureCanvas, outletTemperatureCanvas, outletWallTempCanvas,
+            outletMoleFracCanvas, outletAdsorbedCanvas,
+            processStages, numCycles, cycleDuration, totalDuration, stageColors,
+            selectCase, toggleCategory, getStep, formatNumber,
+            onParamChange, onArrayParamChange, onObjectParamChange,
+            resetDefaults, loadJsonFile, exportJson, exportCsv,
+            validateParams, runSimulation,
+            JSON
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
